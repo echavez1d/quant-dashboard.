@@ -4,7 +4,7 @@ import pandas as pd
 from src.data_loader import fetch_market_data
 from src.returns import calculate_returns, resample_returns
 from src.statistics import compute_summary_statistics, calculate_max_drawdown, run_normality_tests
-from src.distributions import plot_return_distribution
+from src.distributions import plot_return_distribution, plot_rolling_moments
 from src.risk import calculate_historical_var, calculate_historical_cvar
 
 st.set_page_config(page_title="Quant Dashboard", page_icon="📈", layout="wide")
@@ -83,13 +83,28 @@ if ticker:
                 else f"{row['Value']:.4f}", axis=1
             )
             st.table(stats_df[["Metric", "Formatted Value"]])
-            
+
         with tab5:
+            # 1. Static Histogram
             fig_dist = plot_return_distribution(data["Daily_Return"], ticker)
             st.plotly_chart(fig_dist, use_container_width=True)
+            
             st.markdown("### Formal Normality Tests")
             normality_df = run_normality_tests(data["Daily_Return"])
             st.dataframe(normality_df, use_container_width=True, hide_index=True)
+            
+            st.divider()
+            
+            # 2. Dynamic Rolling Moments Visualization
+            st.markdown("### Dynamic Evolution of Tail Risk")
+            st.markdown("""
+            Standard statistics assume risk is constant. By plotting a 6-month rolling window, we can visualize regime changes:
+            *   **Skewness (Purple):** When this dips deeply below the zero line, downside risk dominates.
+            *   **Kurtosis (Orange):** When this spikes above zero, the market is experiencing extreme "fat-tailed" volatility events (market shocks).
+            """)
+            
+            fig_moments = plot_rolling_moments(data["Daily_Return"], ticker)
+            st.plotly_chart(fig_moments, use_container_width=True)
 
         with tab6:
             st.markdown(f"### Historical Tail Risk for {ticker}")

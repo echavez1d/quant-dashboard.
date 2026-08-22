@@ -36,7 +36,7 @@ def plot_return_distribution(returns_series: pd.Series, ticker: str) -> go.Figur
     fig.add_trace(go.Scatter(
         x=x_axis, y=kde_pdf,
         mode='lines',
-        name='KDE (Smoothed Reality)',
+        name='KDE (Smoothed)',
         line=dict(color='darkmagenta', width=4) 
     ))
 

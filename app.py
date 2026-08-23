@@ -6,6 +6,7 @@ from src.returns import calculate_returns, resample_returns
 from src.statistics import compute_summary_statistics, calculate_max_drawdown, run_normality_tests
 from src.distributions import plot_return_distribution, plot_rolling_moments
 from src.risk import calculate_historical_var, calculate_historical_cvar
+from src.levels import calculate_price_zones
 
 st.set_page_config(page_title="Quant Dashboard", page_icon="📈", layout="wide")
 
@@ -59,8 +60,8 @@ if ticker:
 
         st.subheader("Price, Returns & Risk Analysis")
 
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-            "Price History", "Daily Returns", "Drawdowns", "Statistical Moments", "Distribution Analysis", "Tail Risk"
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "Price History", "Daily Returns", "Drawdowns", "Statistical Moments", "Distribution Analysis", "Tail Risk", "S&R Zones"
         ])
 
         with tab1:
@@ -110,6 +111,40 @@ if ticker:
             st.markdown(f"### Historical Tail Risk for {ticker}")
             st.markdown(f"**95% Value at Risk (VaR):** `{var_95*100:.2f}%`")
             st.markdown(f"**95% Expected Shortfall (CVaR):** `{cvar_95*100:.2f}%`")
+
+        with tab7:
+            st.markdown("### Historical Support & Resistance Zones")
+            st.markdown("Quantitative S&R levels based on historical time-at-price density. The 'heaviest' zones represent major historical turning points or consolidation levels.")
+            
+            # Generate the zones
+            zones_df = calculate_price_zones(data["Close"], num_bins=50)
+            
+            col_search, col_stats = st.columns([1, 2])
+            
+            with col_search:
+                st.info("🔍 **Level Search Engine**")
+                current_price = data["Close"].iloc[-1]
+                target_price = st.number_input("Enter a Price Level to test:", value=float(current_price), step=1.0)
+                
+                # Find which zone this price belongs to
+                match = zones_df[(target_price >= zones_df["Zone_Bottom"]) & (target_price <= zones_df["Zone_Top"])]
+                
+                if not match.empty:
+                    days = match["Days_in_Zone"].values[0]
+                    sig = match["Significance"].values[0]
+                    st.success(f"**Valid Zone Found!**\nThe asset has spent **{days} days** ({sig:.2f}% of the selected timeframe) trading in the ${match['Zone_Bottom'].values[0]:.2f} - ${match['Zone_Top'].values[0]:.2f} range.")
+                else:
+                    st.warning("No significant historical data for this exact price level in the selected timeframe. This might be unprecedented price discovery space.")
+            
+            with col_stats:
+                st.markdown("**Top 5 Heaviest Historical Price Zones**")
+                top_zones = zones_df.head(5).copy()
+                top_zones["Zone Range"] = top_zones.apply(lambda x: f"${x['Zone_Bottom']:,.2f} - ${x['Zone_Top']:,.2f}", axis=1)
+                
+                st.dataframe(
+                    top_zones[["Zone Range", "Days_in_Zone", "Significance"]].style.format({"Significance": "{:.2f}%"}),
+                    use_container_width=True, hide_index=True
+                )
 
         # --- NEW SECTION: MULTIPLE TIME HORIZONS ---
         st.subheader("Historical Returns by Time Horizon")

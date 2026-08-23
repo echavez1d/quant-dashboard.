@@ -60,14 +60,36 @@ if ticker:
 
         st.subheader("Price, Returns & Risk Analysis")
 
+        # --- CALCULATE ZONES ONCE FOR ALL TABS ---
+        # Pass the full OHLC dataframe. Tolerance determines how wide the zones are.
+        zones_df = calculate_price_zones(data, left_bars=5, right_bars=5, cluster_tolerance=0.005)
+
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "Price History", "Daily Returns", "Drawdowns", "Statistical Moments", "Distribution Analysis", "Tail Risk", "S&R Zones"
         ])
 
         with tab1:
+            # 1. Create the base price chart
             fig_price = px.line(data, x=data.index, y="Close", title=f"{ticker} Price History")
+            
+            # 2. Add horizontal shaded bands for the top 3 zones
+            if not zones_df.empty:
+                top_zones = zones_df.head(3)
+                for _, zone in top_zones.iterrows():
+                    fig_price.add_hrect(
+                      y0=zone["Zone_Bottom"], 
+                      y1=zone["Zone_Top"], 
+                      line_width=1,
+                      line_color="rgba(100, 150, 250, 0.5)",
+                      fillcolor="rgba(100, 150, 250, 0.2)", # Transparent blue
+                      layer="below", # Keeps the price line clearly visible on top
+                      annotation_text=f"Reversals: {int(zone['Days_in_Zone'])}", 
+                      annotation_position="top left"
+                    )
+                    
+            # 3. Render the chart in the tab
             st.plotly_chart(fig_price, use_container_width=True)
-
+            
         with tab2:
             fig_daily = px.bar(data, x=data.index, y="Daily_Return", title=f"{ticker} Daily Returns")
             st.plotly_chart(fig_daily, use_container_width=True)
@@ -116,9 +138,6 @@ if ticker:
             st.markdown("### Historical Support & Resistance Zones")
             st.markdown("Quantitative S&R levels based on historical time-at-price density. The 'heaviest' zones represent major historical turning points or consolidation levels.")
             
-            # Pass the full OHLC dataframe. Tolerance determines how wide the zones are.
-            zones_df = calculate_price_zones(data, left_bars=5, right_bars=5, cluster_tolerance=0.005)
-            
             col_search, col_stats = st.columns([1, 2])
             
             with col_search:
@@ -138,11 +157,11 @@ if ticker:
             
             with col_stats:
                 st.markdown("**Top 5 Heaviest Historical Price Zones**")
-                top_zones = zones_df.head(5).copy()
-                top_zones["Zone Range"] = top_zones.apply(lambda x: f"${x['Zone_Bottom']:,.2f} - ${x['Zone_Top']:,.2f}", axis=1)
+                top_zones_table = zones_df.head(5).copy()
+                top_zones_table["Zone Range"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} - ${x['Zone_Top']:,.2f}", axis=1)
                 
                 st.dataframe(
-                    top_zones[["Zone Range", "Days_in_Zone", "Significance"]].style.format({"Significance": "{:.2f}%"}),
+                    top_zones_table[["Zone Range", "Days_in_Zone", "Significance"]].style.format({"Significance": "{:.2f}%"}),
                     use_container_width=True, hide_index=True
                 )
 

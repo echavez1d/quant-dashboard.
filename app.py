@@ -116,8 +116,8 @@ if ticker:
             st.markdown("### Historical Support & Resistance Zones")
             st.markdown("Quantitative S&R levels based on historical time-at-price density. The 'heaviest' zones represent major historical turning points or consolidation levels.")
             
-            # Generate the zones
-            zones_df = calculate_price_zones(data["Close"], num_bins=50)
+            # Pass the full OHLC dataframe. Tolerance determines how wide the zones are.
+            zones_df = calculate_price_zones(data, left_bars=5, right_bars=5, cluster_tolerance=0.005)
             
             col_search, col_stats = st.columns([1, 2])
             

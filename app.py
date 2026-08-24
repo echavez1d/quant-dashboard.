@@ -118,7 +118,7 @@ if ticker:
                     top_str = f"${zone['Zone_Top']:.2f}"
                     center_str = f"${zone['Zone_Center']:.2f}"
                     reversals = int(zone['Reversal_Touches'])
-                    sig_score = zone['Significance']
+                    sig_score = zone.get('Score', 0)
 
                     # Shaded Zone with Price Bounds
                     fig_price.add_hrect(

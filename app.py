@@ -209,31 +209,37 @@ if ticker:
                                f"• **Strength Score:** {score:.2f}/100")
                 else:
                     st.warning("No historical swing pivots recorded at this exact price level.")
-            
+
             with col_stats:
                 st.markdown("**Top Historical Reversal Zones (Ranked by Strength)**")
-                top_zones_table = zones_df.head(10).copy()
-                top_zones_table["Price Band"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} –${x['Zone_Top']:,.2f}", axis=1)
                 
-                # Select and rename columns for a clean UI
-                display_df = top_zones_table[[
-                    "Price Band", "Reversal_Touches", "Score", "Concentration", "Rejection_Rate", "Reaction_Str", "Confidence"
-                ]].rename(columns={
-                    "Reversal_Touches": "Pivots",
-                    "Score": "Total Score",
-                    "Reaction_Str": "Reaction"
-                })
-                
-                st.dataframe(
-                    display_df.style.format({
-                        "Total Score": "{:.1f}",
-                        "Concentration": "{:.2f}",
-                        "Rejection_Rate": "{:.2f}",
-                        "Reaction": "{:.2f}",
-                        "Confidence": "{:.2f}"
-                    }).background_gradient(subset=["Total Score"], cmap="viridis"),
-                    use_container_width=True, hide_index=True
-                )
+                # Safety check: Only try to display the table if zones actually exist
+                if zones_df.empty:
+                    st.info("No historical S&R zones detected for this timeframe and sensitivity. Try adjusting your sidebar parameters.")
+                else:
+                    top_zones_table = zones_df.head(10).copy()
+                    top_zones_table["Price Band"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} – ${x['Zone_Top']:,.2f}", axis=1)
+                    
+                    # Select and rename columns for a clean UI
+                    display_df = top_zones_table[[
+                        "Price Band", "Reversal_Touches", "Score", "Concentration", "Rejection_Rate", "Reaction_Str", "Confidence"
+                    ]].rename(columns={
+                        "Reversal_Touches": "Pivots",
+                        "Score": "Total Score",
+                        "Reaction_Str": "Reaction"
+                    })
+                    
+                    st.dataframe(
+                        display_df.style.format({
+                            "Total Score": "{:.1f}",
+                            "Concentration": "{:.2f}",
+                            "Rejection_Rate": "{:.2f}",
+                            "Reaction": "{:.2f}",
+                            "Confidence": "{:.2f}"
+                        }).background_gradient(subset=["Total Score"], cmap="viridis"),
+                        use_container_width=True, hide_index=True
+                    )
+
 
         # --- MULTIPLE TIME HORIZONS ---
         st.subheader("Historical Returns by Time Horizon")

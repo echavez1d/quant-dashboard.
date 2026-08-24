@@ -1,7 +1,13 @@
 import pandas as pd
 import numpy as np
 from scipy.signal import argrelextrema
-from src.scoring import Turnaround, Zone, ZoneTest, evaluate_zone
+from src.scoring import (
+    Turnaround, 
+    Zone, 
+    ZoneTest, 
+    merge_overlapping_zones, 
+    evaluate_chart_zones
+)
 
 def calculate_atr(df, period=14):
     high_low = df['High'] - df['Low']
@@ -95,9 +101,12 @@ def calculate_price_zones(df, left_bars=5, right_bars=5, cluster_tolerance=0.005
             current_cluster = [p]
     zones_raw.append(current_cluster)
     
-    results = []
     avg_atr = data['ATR'].iloc[-1]
     
+    # ---------------------------------------------------------
+    # PHASE 1: Generate Candidate Zones (Overlapping)
+    # ---------------------------------------------------------
+    candidate_zones = []
     for cluster in zones_raw:
         raw_low = min(cluster)
         raw_high = max(cluster)
@@ -108,27 +117,52 @@ def calculate_price_zones(df, left_bars=5, right_bars=5, cluster_tolerance=0.005
         z_low = center - half_width
         z_high = center + half_width
         
-        zone_obj = Zone(low=z_low, high=z_high)
-        
-        real_tests = simulate_historical_tests(data, z_low, z_high, lookahead_bars=10)
-        
-        score_breakdown = evaluate_zone(
-            zone=zone_obj,
-            turnarounds=turnarounds,
-            tests=real_tests,
-            target_reaction_atr=2.0
-        )
+        candidate_zones.append(Zone(low=z_low, high=z_high))
+
+    # ---------------------------------------------------------
+    # PHASE 2: Merge Overlapping Zones
+    # ---------------------------------------------------------
+    merged_zones = merge_overlapping_zones(candidate_zones)
+
+    # ---------------------------------------------------------
+    # PHASE 3: Gather historical tests for the merged zones
+    # ---------------------------------------------------------
+    zone_test_pairs = []
+    for zone in merged_zones:
+        real_tests = simulate_historical_tests(data, zone.low, zone.high, lookahead_bars=10)
+        zone_test_pairs.append((zone, real_tests))
+
+    # ---------------------------------------------------------
+    # PHASE 4: Batch Evaluation (Relative Chart Normalization)
+    # ---------------------------------------------------------
+    if not zone_test_pairs:
+        return pd.DataFrame()
+
+    evaluated_zones = evaluate_chart_zones(
+        zone_test_pairs=zone_test_pairs,
+        turnarounds=turnarounds,
+        target_reaction_atr=2.0,
+        final_scale_to_100=True  # Scales the chart's best zone to 100
+    )
+
+    # ---------------------------------------------------------
+    # PHASE 5: Build final DataFrame
+    # ---------------------------------------------------------
+    results = []
+    for zone, breakdown in evaluated_zones:
+        # Re-calculate touches since we merged clusters together
+        touches = sum(1 for t in turnarounds if zone.contains(t.price))
         
         results.append({
-            "Zone_Bottom": z_low,
-            "Zone_Top": z_high,
-            "Zone_Center": center,
-            "Reversal_Touches": len(cluster),
-            "Score": score_breakdown.score,
-            "Concentration": score_breakdown.concentration,
-            "Rejection_Rate": score_breakdown.rejection_rate,
-            "Reaction_Str": score_breakdown.reaction_strength,
-            "Confidence": score_breakdown.confidence
+            "Zone_Bottom": zone.low,
+            "Zone_Top": zone.high,
+            "Zone_Center": (zone.low + zone.high) / 2,
+            "Reversal_Touches": touches,
+            "Score": breakdown.score,
+            "Concentration": breakdown.concentration,
+            "Rejection_Rate": breakdown.rejection_rate,
+            "Reaction_Str": breakdown.reaction_strength,
+            "Confidence": breakdown.confidence
         })
         
     res_df = pd.DataFrame(results)

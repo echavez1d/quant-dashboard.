@@ -213,14 +213,14 @@ if ticker:
             with col_stats:
                 st.markdown("**Top Historical Reversal Zones (Ranked by Strength)**")
                 
-                # Safety check: Only try to display the table if zones actually exist
                 if zones_df.empty:
                     st.info("No historical S&R zones detected for this timeframe and sensitivity. Try adjusting your sidebar parameters.")
                 else:
                     top_zones_table = zones_df.head(10).copy()
-                    top_zones_table["Price Band"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} – ${x['Zone_Top']:,.2f}", axis=1)
+                    top_zones_table["Price Band"] = top_zones_table.apply(
+                        lambda x: f"${x['Zone_Bottom']:,.2f} – ${x['Zone_Top']:,.2f}", axis=1
+                    )
                     
-                    # Select and rename columns for a clean UI
                     display_df = top_zones_table[[
                         "Price Band", "Reversal_Touches", "Score", "Concentration", "Rejection_Rate", "Reaction_Str", "Confidence"
                     ]].rename(columns={
@@ -230,14 +230,21 @@ if ticker:
                     })
                     
                     st.dataframe(
-                        display_df.style.format({
-                            "Total Score": "{:.1f}",
-                            "Concentration": "{:.2f}",
-                            "Rejection_Rate": "{:.2f}",
-                            "Reaction": "{:.2f}",
-                            "Confidence": "{:.2f}"
-                        }).background_gradient(subset=["Total Score"], cmap="viridis"),
-                        use_container_width=True, hide_index=True
+                        display_df,
+                        column_config={
+                            "Total Score": st.column_config.ProgressColumn(
+                                "Total Score",
+                                format="%.1f",
+                                min_value=0,
+                                max_value=100,
+                            ),
+                            "Concentration": st.column_config.NumberColumn(format="%.2f"),
+                            "Rejection_Rate": st.column_config.NumberColumn(format="%.2f"),
+                            "Reaction": st.column_config.NumberColumn(format="%.2f"),
+                            "Confidence": st.column_config.NumberColumn(format="%.2f"),
+                        },
+                        width="stretch",
+                        hide_index=True
                     )
 
 

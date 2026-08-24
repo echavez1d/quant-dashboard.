@@ -14,9 +14,26 @@ st.set_page_config(page_title="Quant Dashboard", page_icon="📈", layout="wide"
 st.title("📈 Quantitative Financial Analysis Platform")
 st.caption("Historical statistical behavior, distribution analysis, and risk metrics.")
 
+# --- SIDEBAR CONTROLS ---
 st.sidebar.header("Asset Selection")
 ticker = st.sidebar.text_input("Ticker Symbol", value="AAPL").upper()
 time_period = st.sidebar.selectbox("Lookback Period", ["1M", "3M", "6M", "1Y", "3Y", "5Y", "10Y", "MAX"], index=3)
+
+st.sidebar.divider()
+
+st.sidebar.header("S&R Engine Parameters")
+swing_length = st.sidebar.slider(
+    "Swing Pivot Length (Days)", 
+    min_value=2, max_value=20, value=5, 
+    help="Number of days before and after a high/low to define a valid structural turning point."
+)
+cluster_tol_pct = st.sidebar.slider(
+    "Zone Cluster Tolerance (%)", 
+    min_value=0.1, max_value=3.0, value=0.5, step=0.1, 
+    help="Max percentage difference between price points to group them into a single support/resistance zone."
+)
+# Convert percentage back to decimal for the engine math
+cluster_tolerance = cluster_tol_pct / 100.0
 
 st.divider()
 
@@ -60,8 +77,8 @@ if ticker:
 
         st.subheader("Price, Returns & Risk Analysis")
 
-        # --- CALCULATE S&R ZONES ONCE FOR ALL TABS ---
-        zones_df = calculate_price_zones(data, left_bars=5, right_bars=5, cluster_tolerance=0.005)
+        # --- CALCULATE S&R ZONES ONCE FOR ALL TABS (USING SIDEBAR DYNAMIC INPUTS) ---
+        zones_df = calculate_price_zones(data, left_bars=swing_length, right_bars=swing_length, cluster_tolerance=cluster_tolerance)
 
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "Price History", "Daily Returns", "Drawdowns", "Statistical Moments", "Distribution Analysis", "Tail Risk", "S&R Zones"

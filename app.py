@@ -178,12 +178,16 @@ if ticker:
             st.markdown(f"**95% Value at Risk (VaR):** `{var_95*100:.2f}%`")
             st.markdown(f"**95% Expected Shortfall (CVaR):** `{cvar_95*100:.2f}%`")
 
+
         with tab7:
-            st.markdown("### Historical Support & Resistance Detection Engine")
+            st.markdown("### Advanced Heuristic S&R Engine")
             st.markdown("""
-            This engine detects **objective price levels** where historical supply and demand shifted aggressively.
-            * **Pivot Reversals (Touches):** Counts exact local price peaks (Swing Highs) and valleys (Swing Lows) that bounced off or rejected a given price level.
-            * **Significance Score (%):** The percentage of **all** detected historical turnarounds in this timeframe that concentrated within this specific price band.
+            This engine detects **objective price levels** using a multi-factor quantitative model:
+            * **Score:** The composite Zone Strength Score (0-100).
+            * **Concentration (C):** Recency and volume-weighted turnaround density.
+            * **Rejection (R):** Win-rate of the zone holding when tested.
+            * **Reaction (S):** ATR-normalized strength of the bounce.
+            * **Confidence (F):** Bayesian sample-size adjustment.
             """)
             
             col_search, col_stats = st.columns([1, 2])
@@ -193,30 +197,41 @@ if ticker:
                 current_price = data["Close"].iloc[-1]
                 target_price = st.number_input("Enter a Price Level to test ($):", value=float(current_price), step=1.0)
                 
-                # Search if target price falls inside any calculated zone
                 match = zones_df[(target_price >= zones_df["Zone_Bottom"]) & (target_price <= zones_df["Zone_Top"])]
                 
                 if not match.empty:
                     touches = match["Reversal_Touches"].values[0]
-                    sig = match["Significance"].values[0]
+                    score = match["Score"].values[0]
                     z_bot = match['Zone_Bottom'].values[0]
                     z_top = match['Zone_Top'].values[0]
-                    st.success(f"**Valid Zone Found!**\nThe price **${target_price:.2f}** falls inside a historic zone: **${z_bot:.2f} – ${z_top:.2f}**.\n\n"
-                               f"• **Pivot Reversals:** {touches} turning points\n"
-                               f"• **Significance:** {sig:.2f}% of all historical pivots")
+                    st.success(f"**Valid Zone Found!**\\nThe price **${target_price:.2f}** falls inside a historic zone: **${z_bot:.2f} –${z_top:.2f}**.\\n\\n"
+                               f"• **Pivot Reversals:** {touches}\\n"
+                               f"• **Strength Score:** {score:.2f}/100")
                 else:
-                    st.warning("No historical swing pivots recorded at this exact price level during the lookback period. This represents potential price discovery space.")
+                    st.warning("No historical swing pivots recorded at this exact price level.")
             
             with col_stats:
-                st.markdown("**Top Historical Reversal Zones**")
-                top_zones_table = zones_df.head(5).copy()
-                top_zones_table["Price Band Range"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} – ${x['Zone_Top']:,.2f}", axis=1)
-                top_zones_table["Midpoint"] = top_zones_table["Zone_Center"].apply(lambda x: f"${x:,.2f}")
+                st.markdown("**Top Historical Reversal Zones (Ranked by Strength)**")
+                top_zones_table = zones_df.head(10).copy()
+                top_zones_table["Price Band"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} –${x['Zone_Top']:,.2f}", axis=1)
+                
+                # Select and rename columns for a clean UI
+                display_df = top_zones_table[[
+                    "Price Band", "Reversal_Touches", "Score", "Concentration", "Rejection_Rate", "Reaction_Str", "Confidence"
+                ]].rename(columns={
+                    "Reversal_Touches": "Pivots",
+                    "Score": "Total Score",
+                    "Reaction_Str": "Reaction"
+                })
                 
                 st.dataframe(
-                    top_zones_table[["Price Band Range", "Midpoint", "Reversal_Touches", "Significance"]].rename(
-                        columns={"Reversal_Touches": "Pivot Reversals", "Significance": "Significance Score"}
-                    ).style.format({"Significance Score": "{:.2f}%"}),
+                    display_df.style.format({
+                        "Total Score": "{:.1f}",
+                        "Concentration": "{:.2f}",
+                        "Rejection_Rate": "{:.2f}",
+                        "Reaction": "{:.2f}",
+                        "Confidence": "{:.2f}"
+                    }).background_gradient(subset=["Total Score"], cmap="viridis"),
                     use_container_width=True, hide_index=True
                 )
 

@@ -22,7 +22,6 @@ st.divider()
 # --- STAGE 10: UI POLISH (CSV EXPORT) ---
 @st.cache_data
 def convert_df(df):
-    # Cache the conversion to prevent computation on every rerun
     return df.to_csv(index=True).encode('utf-8')
 # ----------------------------------------
 
@@ -60,8 +59,7 @@ if ticker:
 
         st.subheader("Price, Returns & Risk Analysis")
 
-        # --- CALCULATE ZONES ONCE FOR ALL TABS ---
-        # Pass the full OHLC dataframe. Tolerance determines how wide the zones are.
+        # --- CALCULATE S&R ZONES ONCE FOR ALL TABS ---
         zones_df = calculate_price_zones(data, left_bars=5, right_bars=5, cluster_tolerance=0.005)
 
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
@@ -69,25 +67,42 @@ if ticker:
         ])
 
         with tab1:
-            # 1. Create the base price chart
-            fig_price = px.line(data, x=data.index, y="Close", title=f"{ticker} Price History")
+            # 1. Base Price Chart
+            fig_price = px.line(data, x=data.index, y="Close", title=f"{ticker} Price History with Major S&R Zones")
             
-            # 2. Add horizontal shaded bands for the top 3 zones
+            # 2. Color-coded Significance Palettes
+            zone_styles = [
+                {"fill": "rgba(245, 158, 11, 0.22)", "border": "rgba(245, 158, 11, 0.85)", "label": "🥇 Tier 1 Strongest Zone"},
+                {"fill": "rgba(59, 130, 246, 0.20)", "border": "rgba(59, 130, 246, 0.85)", "label": "🥈 Tier 2 Major Zone"},
+                {"fill": "rgba(168, 85, 247, 0.18)", "border": "rgba(168, 85, 247, 0.85)", "label": "🥉 Tier 3 Key Zone"}
+            ]
+
+            # 3. Add shaded horizontal bands with price bounds and significance colors
             if not zones_df.empty:
                 top_zones = zones_df.head(3)
-                for _, zone in top_zones.iterrows():
-                    fig_price.add_hrect(
-                      y0=zone["Zone_Bottom"], 
-                      y1=zone["Zone_Top"], 
-                      line_width=1,
-                      line_color="rgba(100, 150, 250, 0.5)",
-                      fillcolor="rgba(100, 150, 250, 0.2)", # Transparent blue
-                      layer="below", # Keeps the price line clearly visible on top
-                      annotation_text=f"Reversals: {int(zone['Days_in_Zone'])}", 
-                      annotation_position="top left"
-                    )
+                for idx, (_, zone) in enumerate(top_zones.iterrows()):
+                    style = zone_styles[idx] if idx < len(zone_styles) else zone_styles[-1]
                     
-            # 3. Render the chart in the tab
+                    bottom_str = f"${zone['Zone_Bottom']:.2f}"
+                    top_str = f"${zone['Zone_Top']:.2f}"
+                    center_str = f"${zone['Zone_Center']:.2f}"
+                    reversals = int(zone['Reversal_Touches'])
+                    sig_score = zone['Significance']
+
+                    # Shaded Zone with Price Bounds
+                    fig_price.add_hrect(
+                        y0=zone["Zone_Bottom"], 
+                        y1=zone["Zone_Top"], 
+                        line_width=1.5,
+                        line_color=style["border"],
+                        fillcolor=style["fill"], 
+                        layer="below",
+                        annotation_text=f"{style['label']} | Range: {bottom_str} - {top_str} (Mid: {center_str}) | {reversals} Reversals ({sig_score:.1f}% Sig)",
+                        annotation_position="top left",
+                        annotation_font_color=style["border"],
+                        annotation_font_size=11
+                    )
+
             st.plotly_chart(fig_price, use_container_width=True)
             
         with tab2:
@@ -108,7 +123,6 @@ if ticker:
             st.table(stats_df[["Metric", "Formatted Value"]])
 
         with tab5:
-            # 1. Static Histogram
             fig_dist = plot_return_distribution(data["Daily_Return"], ticker)
             st.plotly_chart(fig_dist, use_container_width=True)
             
@@ -118,12 +132,11 @@ if ticker:
             
             st.divider()
             
-            # 2. Dynamic Rolling Moments Visualization
             st.markdown("### Dynamic Evolution of Tail Risk")
             st.markdown("""
             Standard statistics assume risk is constant. By plotting a 6-month rolling window, we can visualize regime changes:
             *   **Skewness (Purple):** When this dips deeply below the zero line, downside risk dominates.
-            *   **Kurtosis (Orange):** When this spikes above zero, the market is experiencing extreme "fat-tailed" volatility events (market shocks).
+            *   **Kurtosis (Orange):** When this spikes above zero, the market is experiencing extreme "fat-tailed" volatility events.
             """)
             
             fig_moments = plot_rolling_moments(data["Daily_Return"], ticker)
@@ -135,37 +148,48 @@ if ticker:
             st.markdown(f"**95% Expected Shortfall (CVaR):** `{cvar_95*100:.2f}%`")
 
         with tab7:
-            st.markdown("### Historical Support & Resistance Zones")
-            st.markdown("Quantitative S&R levels based on historical time-at-price density. The 'heaviest' zones represent major historical turning points or consolidation levels.")
+            st.markdown("### Historical Support & Resistance Detection Engine")
+            st.markdown("""
+            This engine detects **objective price levels** where historical supply and demand shifted aggressively.
+            * **Pivot Reversals (Touches):** Counts exact local price peaks (Swing Highs) and valleys (Swing Lows) that bounced off or rejected a given price level.
+            * **Significance Score (%):** The percentage of **all** detected historical turnarounds in this timeframe that concentrated within this specific price band.
+            """)
             
             col_search, col_stats = st.columns([1, 2])
             
             with col_search:
                 st.info("🔍 **Level Search Engine**")
                 current_price = data["Close"].iloc[-1]
-                target_price = st.number_input("Enter a Price Level to test:", value=float(current_price), step=1.0)
+                target_price = st.number_input("Enter a Price Level to test ($):", value=float(current_price), step=1.0)
                 
-                # Find which zone this price belongs to
+                # Search if target price falls inside any calculated zone
                 match = zones_df[(target_price >= zones_df["Zone_Bottom"]) & (target_price <= zones_df["Zone_Top"])]
                 
                 if not match.empty:
-                    days = match["Days_in_Zone"].values[0]
+                    touches = match["Reversal_Touches"].values[0]
                     sig = match["Significance"].values[0]
-                    st.success(f"**Valid Zone Found!**\nThe asset has spent **{days} days** ({sig:.2f}% of the selected timeframe) trading in the ${match['Zone_Bottom'].values[0]:.2f} - ${match['Zone_Top'].values[0]:.2f} range.")
+                    z_bot = match['Zone_Bottom'].values[0]
+                    z_top = match['Zone_Top'].values[0]
+                    st.success(f"**Valid Zone Found!**\nThe price **${target_price:.2f}** falls inside a historic zone: **${z_bot:.2f} – ${z_top:.2f}**.\n\n"
+                               f"• **Pivot Reversals:** {touches} turning points\n"
+                               f"• **Significance:** {sig:.2f}% of all historical pivots")
                 else:
-                    st.warning("No significant historical data for this exact price level in the selected timeframe. This might be unprecedented price discovery space.")
+                    st.warning("No historical swing pivots recorded at this exact price level during the lookback period. This represents potential price discovery space.")
             
             with col_stats:
-                st.markdown("**Top 5 Heaviest Historical Price Zones**")
+                st.markdown("**Top Historical Reversal Zones**")
                 top_zones_table = zones_df.head(5).copy()
-                top_zones_table["Zone Range"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} - ${x['Zone_Top']:,.2f}", axis=1)
+                top_zones_table["Price Band Range"] = top_zones_table.apply(lambda x: f"${x['Zone_Bottom']:,.2f} – ${x['Zone_Top']:,.2f}", axis=1)
+                top_zones_table["Midpoint"] = top_zones_table["Zone_Center"].apply(lambda x: f"${x:,.2f}")
                 
                 st.dataframe(
-                    top_zones_table[["Zone Range", "Days_in_Zone", "Significance"]].style.format({"Significance": "{:.2f}%"}),
+                    top_zones_table[["Price Band Range", "Midpoint", "Reversal_Touches", "Significance"]].rename(
+                        columns={"Reversal_Touches": "Pivot Reversals", "Significance": "Significance Score"}
+                    ).style.format({"Significance Score": "{:.2f}%"}),
                     use_container_width=True, hide_index=True
                 )
 
-        # --- NEW SECTION: MULTIPLE TIME HORIZONS ---
+        # --- MULTIPLE TIME HORIZONS ---
         st.subheader("Historical Returns by Time Horizon")
         st.caption("Actual point-to-point historical returns calculated from settled market prices.")
         

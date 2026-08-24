@@ -66,57 +66,58 @@ if ticker:
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "Price History", "Daily Returns", "Drawdowns", "Statistical Moments", "Distribution Analysis", "Tail Risk", "S&R Zones"
         ])
+
         with tab1:
-        # 1. Base Price Chart (Now Candlesticks!)
-        fig_price = go.Figure(data=[go.Candlestick(
-            x=data.index,
-            open=data['Open'],
-            high=data['High'],
-            low=data['Low'],
-            close=data['Close'],
-            name='Candlestick'
-        )])
-        
-        fig_price.update_layout(
-            title=f"{ticker} Price History with Major S&R Zones",
-            xaxis_rangeslider_visible=False, # Hides the bulky slider at the bottom
-            yaxis_title="Price ($)"
-        )
-        
-        # 2. Color-coded Significance Palettes
-        zone_styles = [
-            {"fill": "rgba(245, 158, 11, 0.22)", "border": "rgba(245, 158, 11, 0.85)", "label": "🥇 Tier 1 Strongest Zone"},
-            {"fill": "rgba(59, 130, 246, 0.20)", "border": "rgba(59, 130, 246, 0.85)", "label": "🥈 Tier 2 Major Zone"},
-            {"fill": "rgba(168, 85, 247, 0.18)", "border": "rgba(168, 85, 247, 0.85)", "label": "🥉 Tier 3 Key Zone"}
-        ]
+            # 1. Base Price Chart (Now Candlesticks!)
+            fig_price = go.Figure(data=[go.Candlestick(
+                x=data.index,
+                open=data['Open'],
+                high=data['High'],
+                low=data['Low'],
+                close=data['Close'],
+                name='Candlestick'
+            )])
+            
+            fig_price.update_layout(
+                title=f"{ticker} Price History with Major S&R Zones",
+                xaxis_rangeslider_visible=False,
+                yaxis_title="Price ($)"
+            )
+            
+            # 2. Color-coded Significance Palettes
+            zone_styles = [
+                {"fill": "rgba(245, 158, 11, 0.22)", "border": "rgba(245, 158, 11, 0.85)", "label": "🥇 Tier 1 Strongest Zone"},
+                {"fill": "rgba(59, 130, 246, 0.20)", "border": "rgba(59, 130, 246, 0.85)", "label": "🥈 Tier 2 Major Zone"},
+                {"fill": "rgba(168, 85, 247, 0.18)", "border": "rgba(168, 85, 247, 0.85)", "label": "🥉 Tier 3 Key Zone"}
+            ]
 
-        # 3. Add shaded horizontal bands with price bounds and significance colors
-        if not zones_df.empty:
-            top_zones = zones_df.head(3)
-            for idx, (_, zone) in enumerate(top_zones.iterrows()):
-                style = zone_styles[idx] if idx < len(zone_styles) else zone_styles[-1]
-                
-                bottom_str = f"${zone['Zone_Bottom']:.2f}"
-                top_str = f"${zone['Zone_Top']:.2f}"
-                center_str = f"${zone['Zone_Center']:.2f}"
-                reversals = int(zone['Reversal_Touches'])
-                sig_score = zone['Significance']
+            # 3. Add shaded horizontal bands with price bounds and significance colors
+            if not zones_df.empty:
+                top_zones = zones_df.head(3)
+                for idx, (_, zone) in enumerate(top_zones.iterrows()):
+                    style = zone_styles[idx] if idx < len(zone_styles) else zone_styles[-1]
+                    
+                    bottom_str = f"${zone['Zone_Bottom']:.2f}"
+                    top_str = f"${zone['Zone_Top']:.2f}"
+                    center_str = f"${zone['Zone_Center']:.2f}"
+                    reversals = int(zone['Reversal_Touches'])
+                    sig_score = zone['Significance']
 
-                # Shaded Zone with Price Bounds
-                fig_price.add_hrect(
-                    y0=zone["Zone_Bottom"], 
-                    y1=zone["Zone_Top"], 
-                    line_width=1.5,
-                    line_color=style["border"],
-                    fillcolor=style["fill"], 
-                    layer="below",
-                    annotation_text=f"{style['label']} | Range: {bottom_str} - {top_str} (Mid: {center_str}) | {reversals} Reversals ({sig_score:.1f}% Sig)",
-                    annotation_position="top left",
-                    annotation_font_color=style["border"],
-                    annotation_font_size=11
-                )
+                    # Shaded Zone with Price Bounds
+                    fig_price.add_hrect(
+                        y0=zone["Zone_Bottom"], 
+                        y1=zone["Zone_Top"], 
+                        line_width=1.5,
+                        line_color=style["border"],
+                        fillcolor=style["fill"], 
+                        layer="below",
+                        annotation_text=f"{style['label']} | Range: {bottom_str} - {top_str} (Mid: {center_str}) | {reversals} Reversals ({sig_score:.1f}% Sig)",
+                        annotation_position="top left",
+                        annotation_font_color=style["border"],
+                        annotation_font_size=11
+                    )
 
-        st.plotly_chart(fig_price, use_container_width=True)
+            st.plotly_chart(fig_price, use_container_width=True)
             
         with tab2:
             fig_daily = px.bar(data, x=data.index, y="Daily_Return", title=f"{ticker} Daily Returns")

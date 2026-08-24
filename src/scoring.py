@@ -3,9 +3,9 @@ Support / Resistance Zone Strength Score
 =========================================
 
 A composite, normalized score for how strong a price support/resistance
-zone is, combining five ideas from the spec this was built from:
+zone is, combining five ideas:
 
-    1. Recency-Weighted Turnaround Concentration  -> C
+    1. ReWTS-Weighted Turnaround Concentration   -> C
     2. Zone Rejection Rate                        -> R
     3. Reaction Strength (normalized)              -> S
     4. Band-Width / Density Adjustment             -> D   (optional)
@@ -13,57 +13,22 @@ zone is, combining five ideas from the spec this was built from:
 
 Full formula:
     Zone Strength Score = 100 * C**alpha * R**beta * S**gamma * D**delta * F
-
-Simplified (default, D omitted):
-    Zone Strength Score = 100 * C * R * S * F
-
-This is a research/backtesting heuristic: it scores zones based on
-historical price action and isn't a guarantee of future behavior.
-
-Dependency-free (standard library only) so it drops into any Python
-backend. Every public function maps to one numbered idea in the spec,
-so any output value can be traced back to the formula that produced it.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict
+from collections import defaultdict
+import math
 
 
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
-# These three classes are the raw inputs the scoring functions below
-# consume. They don't do any math themselves -- they just hold the facts
-# about price history that the formulas need.
 
 @dataclass
 class Turnaround:
     """
-    A single significant price reversal (a swing high or swing low) found
-    anywhere in the price history you're analyzing -- not just inside the
-    zone being scored. The concentration functions below look at the whole
-    set of turnarounds and ask "what share of them cluster in this zone?"
-
-    price                       -- price level where the reversal happened
-    age_days                    -- how many days ago this reversal happened
-                                    (0 = most recent bar)
-    volume                      -- traded volume at the time of the reversal
-    average_volume_at_reversal  -- ROLLING average volume as of that date
-                                    (e.g. a 20- or 50-day SMA of volume
-                                    ending at the reversal) -- NOT an
-                                    all-time/dataset-wide average. Volume
-                                    regimes drift over years (splits,
-                                    float growth, changing interest), so
-                                    each turnaround has to be judged
-                                    against what was "normal" at the time
-                                    it happened, not against today's
-                                    baseline.
-    atr_at_reversal             -- ATR (average true range) at the time of
-                                    the reversal; used to express the
-                                    reaction in volatility-normalized terms
-    max_favorable_move          -- biggest price move in the reversal's
-                                    favor afterward (same units as
-                                    price/ATR)
+    A single significant price reversal (swing high or swing low).
     """
     price: float
     age_days: float
@@ -89,19 +54,7 @@ class Zone:
 
 @dataclass
 class ZoneTest:
-    """
-    One time price approached/entered the zone and either got rejected or
-    didn't. This is distinct from Turnaround: every rejection is a kind of
-    turnaround, but a "test" also counts attempts that didn't produce a
-    listed turnaround. Rejection Rate and the Confidence Factor are both
-    measured against this list.
-
-    entered_zone            -- True if price reached the minimum
-                                entry/approach threshold (a "valid" test)
-    move_away_atr           -- how far price moved away afterward, in ATRs
-    rejection_threshold_atr -- ATRs of move-away required to count this
-                                test as a "successful rejection"
-    """
+    """One time price approached/entered the zone."""
     entered_zone: bool
     move_away_atr: float
     rejection_threshold_atr: float = 1.0
@@ -116,59 +69,98 @@ class ZoneTest:
 
 
 # ---------------------------------------------------------------------------
-# 1. Recency-Weighted Turnaround Concentration  ->  C
+# 1. ReWTS-Weighted Turnaround Concentration  ->  C
 # ---------------------------------------------------------------------------
-# Idea: don't count every historical turnaround equally -- a reversal from
-# months ago shouldn't carry the same weight as one from last week. Each
-# turnaround gets an exponentially decaying weight based on its age. This
-# section also folds in Reaction Strength and Volume Factor (originally
-# "section 3" in the spec) so C ends up recency- AND volume-weighted, as
-# the composite score calls for.
 
 def recency_weight(age_days: float, half_life: float = 90.0) -> float:
-    """w_i = 2 ** (-age_i / half_life). Halves every `half_life` days."""
+    """Standard exponential decay fall-back."""
     if half_life <= 0:
         raise ValueError("half_life must be positive")
     return 2 ** (-age_days / half_life)
 
 
 def reaction_strength(t: Turnaround, cap: float = 5.0) -> float:
-    """
-    Reaction_Strength_i = max_favorable_move / ATR_at_reversal, capped so
-    a single freak move can't dominate every score that uses it.
-    """
+    """Reaction_Strength_i = max_favorable_move / ATR_at_reversal."""
     if t.atr_at_reversal <= 0:
         return 0.0
     return min(t.max_favorable_move / t.atr_at_reversal, cap)
 
 
 def volume_factor(t: Turnaround, v_max: float = 3.0) -> float:
-    """
-    Volume_Factor_i = min(volume_i / rolling_average_volume_i, v_max)
-
-    Compares each turnaround only to ITS OWN rolling average
-    (t.average_volume_at_reversal), never to a single number for the
-    whole dataset -- see the note on that field above.
-    """
+    """Volume_Factor_i = min(volume_i / rolling_average_volume_i, v_max)."""
     if t.average_volume_at_reversal <= 0:
         return 1.0
     return min(t.volume / t.average_volume_at_reversal, v_max)
 
 
-def event_weight(
+def compute_rewts_chunk_weights(
+    turnarounds: List[Turnaround],
+    chunk_size_days: float = 30.0,
+    half_life: float = 180.0,
+    gamma: float = 1.0,
+) -> Dict[int, float]:
+    """
+    Groups turnarounds into temporal chunks and calculates dynamic weights 
+    based on regime similarity between historical chunks and current look-back data.
+    """
+    if not turnarounds:
+        return {}
+
+    # 1. Identify current regime (from most recent turnarounds in look-back window)
+    recent_turnarounds = [t for t in turnarounds if t.age_days <= chunk_size_days]
+    if not recent_turnarounds:
+        # Fall back to top 5 youngest turnarounds
+        recent_turnarounds = sorted(turnarounds, key=lambda x: x.age_days)[:5]
+
+    current_atr = sum(t.atr_at_reversal for t in recent_turnarounds) / len(recent_turnarounds)
+    current_vol_factor = sum(volume_factor(t) for t in recent_turnarounds) / len(recent_turnarounds)
+
+    # 2. Partition historical turnarounds into temporal chunks
+    chunks = defaultdict(list)
+    for t in turnarounds:
+        chunk_idx = int(t.age_days // chunk_size_days)
+        chunks[chunk_idx].append(t)
+
+    chunk_weights = {}
+
+    # 3. Calculate regime similarity for each chunk
+    for chunk_idx, chunk_turnarounds in chunks.items():
+        chunk_avg_atr = sum(t.atr_at_reversal for t in chunk_turnarounds) / len(chunk_turnarounds)
+        chunk_avg_vol = sum(volume_factor(t) for t in chunk_turnarounds) / len(chunk_turnarounds)
+
+        # Normalized feature distance between current look-back regime & historical chunk
+        atr_diff = (chunk_avg_atr - current_atr) / max(current_atr, 1e-5)
+        vol_diff = chunk_avg_vol - current_vol_factor
+        regime_distance_sq = (atr_diff ** 2) + (vol_diff ** 2)
+
+        # RBF Kernel for dynamic regime recall
+        similarity_weight = math.exp(-gamma * regime_distance_sq)
+
+        # Soft base decay (prevents distant identical regimes from over-dominating)
+        chunk_age_days = chunk_idx * chunk_size_days
+        base_decay = 2 ** (-chunk_age_days / half_life)
+
+        # Combined ReWTS Chunk Weight
+        chunk_weights[chunk_idx] = similarity_weight * base_decay
+
+    return chunk_weights
+
+
+def event_weight_rewts(
     t: Turnaround,
-    half_life: float = 90.0,
+    chunk_weights: Dict[int, float],
+    chunk_size_days: float = 30.0,
     reaction_cap: float = 5.0,
     volume_cap: float = 3.0,
 ) -> float:
     """
-    Event_Weight_i = w_i * Reaction_Strength_i * Volume_Factor_i
-
-    Recent, high-volume (relative to its own era) reversals that produced
-    a big reaction count for more than quiet, low-volume ones.
+    Event_Weight_i = ReWTS_Chunk_Weight * Reaction_Strength_i * Volume_Factor_i
     """
+    chunk_idx = int(t.age_days // chunk_size_days)
+    rewts_weight = chunk_weights.get(chunk_idx, 1.0)
+
     return (
-        recency_weight(t.age_days, half_life)
+        rewts_weight
         * reaction_strength(t, reaction_cap)
         * volume_factor(t, volume_cap)
     )
@@ -180,20 +172,36 @@ def turnaround_concentration(
     half_life: float = 90.0,
     reaction_cap: float = 5.0,
     volume_cap: float = 3.0,
+    use_rewts: bool = True,
+    chunk_size_days: float = 30.0,
 ) -> float:
     """
-    C = sum(event_weight_i * I_i) / sum(event_weight_i), over every
-    turnaround i in your dataset, where I_i = 1 if that turnaround's price
-    falls inside `zone`. Already normalized to 0-1. Returns 0 if there's
-    no weight to divide by.
+    Calculates C (0.0 - 1.0) as the ratio of in-zone event weights to total event weights.
+    Uses ReWTS dynamic chunking by default to prevent catastrophic forgetting.
     """
-    weights = [
-        event_weight(t, half_life, reaction_cap, volume_cap)
-        for t in turnarounds
-    ]
+    if not turnarounds:
+        return 0.0
+
+    if use_rewts:
+        chunk_weights = compute_rewts_chunk_weights(
+            turnarounds, chunk_size_days=chunk_size_days, half_life=half_life * 2
+        )
+        weights = [
+            event_weight_rewts(t, chunk_weights, chunk_size_days, reaction_cap, volume_cap)
+            for t in turnarounds
+        ]
+    else:
+        weights = [
+            recency_weight(t.age_days, half_life)
+            * reaction_strength(t, reaction_cap)
+            * volume_factor(t, volume_cap)
+            for t in turnarounds
+        ]
+
     total_weight = sum(weights)
     if total_weight <= 0:
         return 0.0
+
     in_zone_weight = sum(
         w for w, t in zip(weights, turnarounds) if zone.contains(t.price)
     )
@@ -203,12 +211,9 @@ def turnaround_concentration(
 # ---------------------------------------------------------------------------
 # 2. Zone Rejection Rate  ->  R
 # ---------------------------------------------------------------------------
-# Concentration alone rewards wide zones just for containing lots of price
-# action. Rejection rate asks the sharper question: when price actually
-# tests this zone, how often does it bounce? Already normalized to 0-1.
 
 def zone_rejection_rate(tests: List[ZoneTest]) -> float:
-    """R = successful rejections / valid zone tests. 0 if no valid tests."""
+    """R = successful rejections / valid zone tests."""
     valid = [t for t in tests if t.is_valid]
     if not valid:
         return 0.0
@@ -219,10 +224,6 @@ def zone_rejection_rate(tests: List[ZoneTest]) -> float:
 # ---------------------------------------------------------------------------
 # 3. Reaction Strength (normalized)  ->  S
 # ---------------------------------------------------------------------------
-# How big are the moves this zone actually produces, on average, relative
-# to a target you consider "meaningful"? This is the "Important
-# normalization" step from the spec -- capped at 1 so one exceptional zone
-# can't blow the composite score past what the other factors allow.
 
 def average_reaction_in_zone(
     turnarounds: List[Turnaround], zone: Zone, cap: float = 5.0
@@ -246,30 +247,18 @@ def normalized_reaction_strength(
 # ---------------------------------------------------------------------------
 # 4. Band-Width / Density Adjustment  ->  D   (optional)
 # ---------------------------------------------------------------------------
-# A wide zone catches more reversals just by being wide. Density asks
-# "reversals per unit of width," and Density Advantage compares that to
-# what an equal-width band would catch on average -- i.e. is this zone
-# unusually good for its size, or just big? Skip this section entirely
-# (leave expected_density=None in evaluate_zone below) if every zone in
-# your system already uses the same volatility-adjusted width.
 
 def atr_based_zone_width(atr: float, k: float = 1.0) -> float:
-    """Zone_Width = k * ATR -- keeps sizing consistent across instruments."""
     return k * atr
 
 
 def reversal_density(weighted_turnaround_count: float, zone_width: float) -> float:
-    """Reversal_Density = weighted turnaround count / zone width."""
     if zone_width <= 0:
         return 0.0
     return weighted_turnaround_count / zone_width
 
 
 def density_advantage(zone_density: float, expected_density: float) -> float:
-    """
-    Density_Advantage = zone_density / expected_density for equal-width
-    bands. > 1 means unusually dense for its size; < 1 means just wide.
-    """
     if expected_density <= 0:
         return 1.0
     return zone_density / expected_density
@@ -278,13 +267,9 @@ def density_advantage(zone_density: float, expected_density: float) -> float:
 # ---------------------------------------------------------------------------
 # 5. Sample-Size Confidence Factor  ->  F
 # ---------------------------------------------------------------------------
-# A zone with 2 tests and a zone with 30 tests shouldn't get equal trust
-# even with the same rejection rate. F shrinks the score toward 0 when
-# there isn't much evidence yet, and approaches 1 as evidence builds.
-# Already normalized to 0-1.
 
 def confidence_factor(n_valid_tests: int, k: float = 5.0) -> float:
-    """F = n / (n + k). k is a smoothing constant (5-10 is a good start)."""
+    """F = n / (n + k)."""
     if n_valid_tests < 0:
         raise ValueError("n_valid_tests can't be negative")
     return n_valid_tests / (n_valid_tests + k)
@@ -293,9 +278,6 @@ def confidence_factor(n_valid_tests: int, k: float = 5.0) -> float:
 # ---------------------------------------------------------------------------
 # Composite score
 # ---------------------------------------------------------------------------
-# Combines C, R, S, F (and optionally D) into the single Zone Strength
-# Score. Every input here should already be 0-1 -- that's what the
-# functions above take care of.
 
 def zone_strength_score(
     concentration: float,                # C
@@ -327,17 +309,14 @@ def zone_strength_score(
 # ---------------------------------------------------------------------------
 # End-to-end helper
 # ---------------------------------------------------------------------------
-# Ties every section above together so you can go from raw price data to a
-# final score + breakdown in one call, without wiring the pieces yourself.
 
 @dataclass
 class ZoneScoreBreakdown:
-    """Every intermediate value behind the final score, for debugging/UI."""
     concentration: float                 # C
     rejection_rate: float                # R
     reaction_strength: float             # S (normalized)
     confidence: float                    # F
-    density_advantage: Optional[float]   # D (None if not used)
+    density_advantage: Optional[float]   # D
     score: float                         # final Zone Strength Score, ~0-100
 
 
@@ -353,27 +332,22 @@ def evaluate_zone(
     confidence_k: float = 5.0,
     expected_density: Optional[float] = None,
     weights: Optional[dict] = None,
+    use_rewts: bool = True,
+    chunk_size_days: float = 30.0,
 ) -> ZoneScoreBreakdown:
     """
-    Run all five sections against one zone and return the composite score
-    plus the breakdown that produced it.
-
-    Each Turnaround must carry its own `average_volume_at_reversal` (a
-    rolling SMA of volume as of that date) -- there's no dataset-wide
-    average passed in here, since one flat number can't fairly represent
-    volume across years of a changing regime.
-
-    `expected_density` is optional -- pass it (computed from neighboring
-    or random bands of equal width) to include the section 4 density
-    adjustment; leave it as None to use the simplified 100*C*R*S*F form.
-
-    `weights` optionally overrides alpha/beta/gamma/delta, e.g.
-    {"alpha": 1.5} to weight concentration more heavily.
+    Evaluates zone strength using ReWTS-weighted concentration by default.
     """
     weights = weights or {}
 
     concentration = turnaround_concentration(
-        turnarounds, zone, half_life, reaction_cap, volume_cap
+        turnarounds,
+        zone,
+        half_life=half_life,
+        reaction_cap=reaction_cap,
+        volume_cap=volume_cap,
+        use_rewts=use_rewts,
+        chunk_size_days=chunk_size_days,
     )
     rejection_rate = zone_rejection_rate(tests)
     avg_reaction = average_reaction_in_zone(turnarounds, zone, reaction_cap)
@@ -383,8 +357,10 @@ def evaluate_zone(
 
     density_adv = None
     if expected_density is not None:
+        chunk_w = compute_rewts_chunk_weights(turnarounds, chunk_size_days) if use_rewts else {}
         weighted_count = sum(
-            event_weight(t, half_life, reaction_cap, volume_cap)
+            event_weight_rewts(t, chunk_w, chunk_size_days, reaction_cap, volume_cap) if use_rewts
+            else (recency_weight(t.age_days, half_life) * reaction_strength(t, reaction_cap) * volume_factor(t, volume_cap))
             for t in turnarounds
             if zone.contains(t.price)
         )
@@ -411,42 +387,3 @@ def evaluate_zone(
         density_advantage=density_adv,
         score=score,
     )
-
-
-# ---------------------------------------------------------------------------
-# Example usage
-# ---------------------------------------------------------------------------
-if __name__ == "__main__":
-    zone = Zone(low=98.0, high=102.0)
-
-    turnarounds = [
-        # volume vs. average_volume_at_reversal is each turnaround's OWN
-        # rolling 20/50-day SMA at that time -- not one shared number.
-        Turnaround(price=100.5, age_days=5, volume=1_500_000, average_volume_at_reversal=1_000_000, atr_at_reversal=1.2, max_favorable_move=3.6),
-        Turnaround(price=99.8, age_days=20, volume=900_000, average_volume_at_reversal=950_000, atr_at_reversal=1.1, max_favorable_move=2.2),
-        Turnaround(price=101.2, age_days=45, volume=1_100_000, average_volume_at_reversal=1_050_000, atr_at_reversal=1.3, max_favorable_move=1.8),
-        Turnaround(price=110.0, age_days=10, volume=2_000_000, average_volume_at_reversal=1_200_000, atr_at_reversal=1.4, max_favorable_move=4.0),  # outside zone
-        # from years earlier, when this instrument's typical volume was
-        # much lower -- gets judged against ITS era's average, not today's
-        Turnaround(price=85.0, age_days=1800, volume=500_000, average_volume_at_reversal=300_000, atr_at_reversal=1.0, max_favorable_move=1.0),
-    ]
-
-    tests = [
-        ZoneTest(entered_zone=True, move_away_atr=1.5),
-        ZoneTest(entered_zone=True, move_away_atr=0.4),
-        ZoneTest(entered_zone=True, move_away_atr=2.1),
-        ZoneTest(entered_zone=False, move_away_atr=0.0),
-    ]
-
-    result = evaluate_zone(
-        zone=zone,
-        turnarounds=turnarounds,
-        tests=tests,
-        target_reaction_atr=2.5,
-    )
-
-    print(f"Concentration (C):      {result.concentration:.3f}")
-    print(f"Rejection rate (R):     {result.rejection_rate:.3f}")
-    print(f"Reaction strength (S):  {result.reaction_strength:.3f}")
-    print(f"Confidence (F):         {result.confidence:.3f}")
-    print(f"Zone Strength Score:    {result.score:.2f} / 100")
